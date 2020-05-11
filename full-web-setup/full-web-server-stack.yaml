@@ -1,0 +1,141 @@
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      InstanceTenancy: "default"
+      Tags:
+        - Key: Name
+          Value: !Join ['', [ !Ref "AWS::StackName", "-VPC" ] ]
+  PublicSubnetWeb:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      Tags:
+        - Key: Name
+          Value: !Sub 10.0.1.0-pub-${AWS::StackName}-sn
+  PrivateSubnetDb:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 2, !GetAZs ]
+      Tags:
+        - Key: Name
+          Value: !Sub 10.0.2.0-prv-${AWS::StackName}-sn
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-IG
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub pub-${AWS::StackName}-RT
+  PubSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicSubnetWeb
+      RouteTableId:
+        Ref: PublicRouteTable
+  PublicRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+  PrivateRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub prv-${AWS::StackName}-RT
+  PrvSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PrivateSubnetDb
+      RouteTableId:
+        Ref: PrivateRouteTable
+  PubEc2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "public ssh http https access"
+      GroupName: !Sub pub-ec2-${AWS::StackName}-sg
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+  PrvEc2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "ssh http https access thru PublicSubnetWeb"
+      GroupName: !Sub prv-ec2-${AWS::StackName}-sg
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 10.0.1.0/24
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 10.0.1.0/24
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 10.0.1.0/24
+  WebEc2:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-01a6e31ac994bbc09
+      Tags:
+        - Key: Name
+          Value: "Web Instance"
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          SubnetId:
+            Ref: PublicSubnetWeb
+          GroupSet:
+            - Ref: PubEc2SG
+      KeyName: "mymac"
+      UserData:
+        'Fn::Base64':
+          !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install python3.x86_64 -y
+            mkdir -p httpserver/path1 httpserver/path2
+            cd httpserver
+            echo "<html><h1>running http python server</h1></html>" > index.html
+            echo "<html><h1>running from PATH1 - python server</h1></html>" > path1/index.html
+            echo "<html><h1>running from PATH2 - python server</h1></html>" > path2/index.html
+            python3 -m http.server 80

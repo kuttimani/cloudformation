@@ -1,0 +1,51 @@
+Mappings:
+  RegionsAmiMap:
+    us-west-2:
+      AMI: ami-003634241a8fcdec0 # amazon linux
+    eu-west-2:
+      AMI: ami-0d6621c01e8c2de2c # ubuntu linux
+Parameters:
+  KeyNameparameter:
+    Description: Keypair to be used for ssh access
+    Type: AWS::EC2::KeyPair::KeyName
+Resources:
+  CL1Ec2Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      InstanceType: t2.micro
+      ImageId:
+        Fn::FindInMap:
+          - RegionsAmiMap
+          - !Ref AWS::Region
+          - AMI
+      Tags:
+        - Key: Name
+          Value: !Join [ " ", [ My, Test, Instance, updated ] ]
+        - Key: Environment
+          Value: Dev
+        - Key: "Region"
+          Value: !Join
+            - ""
+            - - "EC2 Region - "
+              - !Ref AWS::Region
+      SecurityGroups:
+        - !Ref CL1SecurityGroup
+      KeyName: !Ref KeyNameparameter # parameter to be used
+  CL1SecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "enable port 22 for access"
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          FromPort: '22'
+          IpProtocol: tcp
+          ToPort: '22'
+        - CidrIp: 0.0.0.0/0
+          FromPort: '80'
+          IpProtocol: tcp
+          ToPort: '80'
+Outputs:
+  ServerDns:
+    Value: !GetAtt
+      - CL1Ec2Instance
+      - PublicDnsName
