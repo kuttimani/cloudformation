@@ -1,0 +1,28 @@
+WebEc2:
+  Type: "AWS::EC2::Instance"
+  Properties:
+    InstanceType: t2.micro
+    ImageId: ami-01a6e31ac994bbc09
+    Tags:
+      - Key: Name
+        Value: "Web Instance"
+    NetworkInterfaces:
+      - AssociatePublicIpAddress: "true"
+        DeviceIndex: "0"
+        SubnetId:
+          Ref: PublicSubnetWeb
+        GroupSet:
+          - Ref: PubEc2SG
+    KeyName: "mymac"
+    UserData:
+      'Fn::Base64':
+        !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install python3.x86_64 -y
+          mkdir -p httpserver/path1 httpserver/path2
+          cd httpserver
+          echo "<html><h1>running http python server</h1></html>" > index.html
+          echo "<html><h1>running from PATH1 - python server</h1></html>" > path1/index.html
+          echo "<html><h1>running from PATH2 - python server</h1></html>" > path2/index.html
+          python3 -m http.server 80

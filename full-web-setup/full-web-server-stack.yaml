@@ -7,36 +7,51 @@ Resources:
       Tags:
         - Key: Name
           Value: !Join ['', [ !Ref "AWS::StackName", "-VPC" ] ]
-  PublicSubnetWeb:
+  PublicSubnetWebA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
       CidrBlock: 10.0.1.0/24
       AvailabilityZone: !Select [ 0, !GetAZs ]
+      MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub 10.0.1.0-pub-${AWS::StackName}-sn
+          Value: !Sub 10.0.1.0-pub-${AWS::StackName}-sn-A
+    DependsOn: VPC
+  PublicSubnetWebB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 10.0.3.0-pub-${AWS::StackName}-sn-B
+    DependsOn: VPC
   PrivateSubnetDb:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
       CidrBlock: 10.0.2.0/24
-      AvailabilityZone: !Select [ 2, !GetAZs ]
+      AvailabilityZone: !Select [ 0, !GetAZs ]
       Tags:
         - Key: Name
-          Value: !Sub 10.0.2.0-prv-${AWS::StackName}-sn
+          Value: !Sub 10.0.2.0-prv-${AWS::StackName}-sn-A
+    DependsOn: VPC
   InternetGateway:
     Type: AWS::EC2::InternetGateway
-    DependsOn: VPC
     Properties:
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-IG
+    DependsOn: VPC
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
+    DependsOn: VPC
   PublicRouteTable:
     Type: "AWS::EC2::RouteTable"
     Properties:
@@ -44,19 +59,30 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub pub-${AWS::StackName}-RT
-  PubSubnetRouteTableAssociation:
+    DependsOn: VPC
+  PubSubnetRouteTableAssociationA:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId:
-        Ref: PublicSubnetWeb
+        Ref: PublicSubnetWebA
       RouteTableId:
         Ref: PublicRouteTable
+    DependsOn: PublicSubnetWebA
+  PubSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicSubnetWebB
+      RouteTableId:
+        Ref: PublicRouteTable
+    DependsOn: PublicSubnetWebA
   PublicRoute:
     Type: "AWS::EC2::Route"
     Properties:
       DestinationCidrBlock: "0.0.0.0/0"
       GatewayId: !Ref InternetGateway
       RouteTableId: !Ref PublicRouteTable
+    DependsOn: InternetGateway
   PrivateRouteTable:
     Type: "AWS::EC2::RouteTable"
     Properties:
@@ -64,6 +90,7 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub prv-${AWS::StackName}-RT
+    DependsOn: VPC
   PrvSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -71,6 +98,7 @@ Resources:
         Ref: PrivateSubnetDb
       RouteTableId:
         Ref: PrivateRouteTable
+    DependsOn: PrivateSubnetDb
   PubEc2SG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -91,6 +119,7 @@ Resources:
         FromPort: 22
         ToPort: 22
         CidrIp: 0.0.0.0/0
+    DependsOn: VPC
   PrvEc2SG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -111,21 +140,27 @@ Resources:
         FromPort: 22
         ToPort: 22
         CidrIp: 10.0.1.0/24
-  WebEc2:
-    Type: "AWS::EC2::Instance"
+    DependsOn: VPC
+  ALBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "public http access"
+      GroupName: !Sub ALB-${AWS::StackName}-sg
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+    DependsOn: VPC
+  LaunchConfig:
+    Type: "AWS::AutoScaling::LaunchConfiguration"
     Properties:
       InstanceType: t2.micro
       ImageId: ami-01a6e31ac994bbc09
-      Tags:
-        - Key: Name
-          Value: "Web Instance"
-      NetworkInterfaces:
-        - AssociatePublicIpAddress: "true"
-          DeviceIndex: "0"
-          SubnetId:
-            Ref: PublicSubnetWeb
-          GroupSet:
-            - Ref: PubEc2SG
+      SecurityGroups:
+        - !Ref PubEc2SG
       KeyName: "mymac"
       UserData:
         'Fn::Base64':
@@ -139,3 +174,113 @@ Resources:
             echo "<html><h1>running from PATH1 - python server</h1></html>" > path1/index.html
             echo "<html><h1>running from PATH2 - python server</h1></html>" > path2/index.html
             python3 -m http.server 80
+    DependsOn:
+      - PubEc2SG
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-TG
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      TargetType: instance
+      Name: !Sub ${AWS::StackName}-TG
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 120
+    DependsOn:
+      - PublicSubnetWebA
+      - PublicSubnetWebB
+      - ALBLoadbalancer
+  ALBLoadbalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      Name: !Sub ${AWS::StackName}-lb
+      SecurityGroups:
+        - !Ref ALBSG
+      Subnets:
+        - !Ref PublicSubnetWebA
+        - !Ref PublicSubnetWebB
+    DependsOn:
+      - PublicSubnetWebA
+      - PublicSubnetWebB
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALBLoadbalancer
+      Port: 80
+      Protocol: "HTTP"
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref TargetGroup
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${AWS::StackName}-ASG
+      LaunchConfigurationName: !Ref LaunchConfig
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - !Ref PublicSubnetWebA
+        - !Ref PublicSubnetWebB
+      MinSize: 1
+      MaxSize: 2
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 120
+    DependsOn:
+      - LaunchConfig
+      - ALBListener
+  WebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName:
+        Ref: AutoScalingGroup
+      Cooldown : 300
+      ScalingAdjustment: 1
+  WebServerScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName:
+        Ref: AutoScalingGroup
+      Cooldown : 300
+      ScalingAdjustment: -1
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Scale-up if CPU > 60% for 5 minutes"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      AlarmActions:
+        - !Ref WebServerScaleUpPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      ComparisonOperator: GreaterThanThreshold
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Scale-up if CPU < 20% for 5 minutes"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 20
+      AlarmActions:
+        - !Ref WebServerScaleDownPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      ComparisonOperator: LessThanThreshold
